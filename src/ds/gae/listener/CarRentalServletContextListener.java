@@ -1,0 +1,143 @@
+package ds.gae.listener;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.StringTokenizer;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import javax.persistence.EntityManager;
+import javax.persistence.Query;
+import javax.servlet.ServletContextEvent;
+import javax.servlet.ServletContextListener;
+
+import com.google.appengine.labs.repackaged.com.google.common.collect.Multiset.Entry;
+
+import ds.gae.CarRentalModel;
+import ds.gae.entities.Car;
+import ds.gae.entities.CarRentalCompany;
+import ds.gae.entities.CarType;
+
+public class CarRentalServletContextListener implements ServletContextListener {
+
+	@Override
+	public void contextInitialized(ServletContextEvent arg0) {
+		// This will be invoked as part of a warming request, 
+		// or the first user request if no warming request was invoked.
+
+		// check if dummy data is available, and add if necessary
+		if(!isDummyDataAvailable()) {
+			addDummyData();
+		}
+	}
+
+	private boolean isDummyDataAvailable() {
+		// If the Hertz car rental company is in the datastore, we assume the dummy data is available
+
+		// FIXME: use persistence instead
+		Query q = CarRentalModel.get().getEm().createQuery("select  r from CarRentalCompany r");
+		List<CarRentalCompany> carRentalCompanies = q.getResultList();
+		System.out.println("CarRental:"+ carRentalCompanies.size());
+		if(carRentalCompanies.size()>0)
+		{
+			return true;
+		}
+
+		return false;
+
+	}
+
+	private void addDummyData() {
+		loadRental("Hertz","hertz.csv");
+		loadRental("Dockx","dockx.csv");
+	}
+
+	private void loadRental(String name, String datafile) {
+		Logger.getLogger(CarRentalServletContextListener.class.getName()).log(Level.INFO, "loading {0} from file {1}", new Object[]{name, datafile});
+		try {
+
+			Set<Car> cars = loadData(name, datafile);
+
+			CarRentalCompany company = new CarRentalCompany(name, cars);
+			EntityManager em = CarRentalModel.get().getEm();
+			// FIXME: use persistence instead
+			//CarRentalModel.get().CRCS.put(name, company);
+			em.getTransaction().begin();
+			em.persist(company);
+			em.getTransaction().commit();
+			int count=0;
+			for(Map.Entry<String,CarType> entry : company.getCarTypes().entrySet())
+			{
+				em.getTransaction().begin();
+				CarType carType=entry.getValue();
+				carType.setCompanyName(company.getName());
+				em.persist(carType);
+				em.getTransaction().commit();
+			}
+			for(Car car: company.getCars())
+			{    
+				em.getTransaction().begin();
+				car.setName(car.getType().getName());
+				car.setNbOfSeats(car.getType().getNbOfSeats());
+				car.setCompanyName(company.getName());
+				car.setSmokingAllowed(car.getType().isSmokingAllowed());
+				car.setRentalPricePerDay(car.getType().getRentalPricePerDay());
+				car.setTrunkSpace(car.getType().getTrunkSpace());
+				System.out.println("Count :"+ count);
+				em.persist(car);
+				count++;
+				em.getTransaction().commit();
+			}
+
+
+		} catch (NumberFormatException ex) {
+			Logger.getLogger(CarRentalServletContextListener.class.getName()).log(Level.SEVERE, "bad file", ex);
+		} catch (IOException ex) {
+			Logger.getLogger(CarRentalServletContextListener.class.getName()).log(Level.SEVERE, null, ex);
+		}
+	}
+
+	public static Set<Car> loadData(String name, String datafile) throws NumberFormatException, IOException {
+
+
+		Set<Car> cars = new HashSet<Car>();
+		int carId = 1;
+
+		//open file from jar
+		BufferedReader in = new BufferedReader(new InputStreamReader(CarRentalServletContextListener.class.getClassLoader().getResourceAsStream(datafile)));
+		//while next line exists
+		while (in.ready()) {
+			//read line
+			String line = in.readLine();
+			//if comment: skip
+			if (line.startsWith("#")) {
+				continue;
+			}
+			//tokenize on ,
+			StringTokenizer csvReader = new StringTokenizer(line, ",");
+			//create new car type from first 5 fields
+			CarType type = new CarType(csvReader.nextToken(),
+					Integer.parseInt(csvReader.nextToken()),
+					Float.parseFloat(csvReader.nextToken()),
+					Double.parseDouble(csvReader.nextToken()),
+					Boolean.parseBoolean(csvReader.nextToken()));
+			
+			//create N new cars with given type, where N is the 5th field
+			for (int i = Integer.parseInt(csvReader.nextToken()); i > 0; i--) {
+				cars.add(new Car(carId++, type));
+			}
+		}
+
+		return cars;
+	}
+
+	@Override
+	public void contextDestroyed(ServletContextEvent arg0) {
+		// App Engine does not currently invoke this method.
+	}
+}
